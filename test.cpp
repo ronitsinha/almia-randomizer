@@ -73,6 +73,8 @@ void explore_subtable (uint32_t subtable_offset, uint32_t fnt_offset, string pat
 
             file_locations->insert(pair<string,uint16_t>(full_path_str, *file_id));
             *file_id += 1;
+
+            delete[] filename_bytes;
         }
         
         rom_file.read(&length_type_byte, 1);
@@ -117,7 +119,7 @@ map<string,uint16_t> get_file_locations () {
 // https://en.wikipedia.org/wiki/Lempel%E2%80%93Ziv%E2%80%93Storer%E2%80%93Szymanski
 // https://magikos.livejournal.com/7375.html?
 // https://github.com/SciresM/FEAT/blob/master/FEAT/DSDecmp/Formats/Nitro/LZ10.cs#L83
-char* decompress_LZ10 (char *compressed_bytes, uint32_t compressed_size) {
+uint32_t decompress_LZ10 (char *compressed_bytes, uint32_t compressed_size, uint8_t **uncompressed_data) {
     assert(compressed_size >= 4);
 
     // First byte 0x10 means file is LZ10 compressed
@@ -128,55 +130,64 @@ char* decompress_LZ10 (char *compressed_bytes, uint32_t compressed_size) {
         (uint8_t) *(compressed_bytes + 2) << 8 |
         (uint8_t) *(compressed_bytes + 1);
 
-    char* uncompressed_file = new char[uncompressed_size];
+    cout << "uncompressed_size: " << uncompressed_size << endl;
+
+    uint8_t* uncompressed_file = new uint8_t[uncompressed_size];
 
     uint32_t input_pos = 4;
     uint32_t output_pos = 0;
 
-    while (input_pos < compressed_size) {
-        uint8_t flag_bytes = (uint8_t) *(compressed_bytes + (input_pos++));
+    while (output_pos < uncompressed_size) {
+        assert(input_pos < compressed_size);
+        uint8_t flag_byte = (uint8_t) compressed_bytes[input_pos++];
 
-        for (int i = 0; i < 8; i ++) {
-            bool flag_bit = (flag_bytes >> i) & 1;
+        for (int i = 1; i <= 8 and output_pos < uncompressed_size and input_pos < compressed_size; i ++) {
+            bool flag_bit = (flag_byte >> 8-i) & 1;
             if (flag_bit) {
                 // Dictionary entry
-                uint8_t token1 = (uint8_t) *(compressed_bytes + (input_pos++));
-                uint8_t token2 = (uint8_t) *(compressed_bytes + (input_pos++));
+                uint8_t token1 = (uint8_t) compressed_bytes[input_pos++];
+                uint8_t token2 = (uint8_t) compressed_bytes[input_pos++];
                 
-                uint16_t disp = ((token1 & 0xF) << 8) | token2;
+                int disp = ((token1 & 0x0F) << 8) | token2; disp += 1;
                 uint8_t length = (token1 >> 4) + 3; // plus 3 for some reason?
 
-                uint16_t read_start = output_pos - disp - 1;
+                int read_start = output_pos - disp;
+
+                assert (disp <= output_pos);
 
                 for (int j = 0; j < length; j++) {
-                    *(uncompressed_file + (output_pos++)) = *(uncompressed_file + read_start + i);
+                    uncompressed_file[output_pos++] = uncompressed_file[read_start + (j % disp)];
                 }
             } else {
                 // Raw byte
-                *(uncompressed_file + (output_pos++)) = *(compressed_bytes + (input_pos++));
+                uncompressed_file[output_pos++] = compressed_bytes[input_pos++];
             }
         }
     }
 
-    return uncompressed_file;
+    *uncompressed_data = uncompressed_file;
+    return uncompressed_size;
 }
 
-uint32_t compress_LZ10 (char *uncompressed_data, uint32_t uncompressed_size, unsigned char **compressed_data) {
+uint32_t compress_LZ10 (uint8_t *uncompressed_data, uint32_t uncompressed_size, vector<uint8_t> *compressed_data, LCS* lcs_helper) {
     vector<uint8_t> buffer;
 
     buffer.push_back(0x10);
-    buffer.push_back(0);
+    buffer.push_back(0); /* TODO: load uncompressed size into these three bytes */
     buffer.push_back(0);
     buffer.push_back(0);
 
-    // int max_disp = 0xFFFF;
-    // int max_length = 0xFFF + 3;
+    int max_disp = 0xFFF;
+    int max_length = 0xF + 3;
 
-    uint32_t cur_position = 4;
+    uint32_t cur_position = 0;
+
+    // LCS *lcs_helper = new LCS; // used for computing dictionary entries
+    // lcs_helper->initialize(uncompressed_data, uncompressed_size);
 
     while (cur_position < uncompressed_size) {
         // https://en.wikipedia.org/wiki/Longest_common_substring
-        // get longest common substring (up to max length of dicitionary entry)
+        // get longest common substring (up to max length of dictionary entry)
         // if passes threshold (length >= 3), make it a dictionary entry
         // otherwise just copy raw bytes
 
@@ -185,26 +196,97 @@ uint32_t compress_LZ10 (char *uncompressed_data, uint32_t uncompressed_size, uns
 
         uint8_t flag_byte = 0;
 
-        // int current_compress_idx = buffer.size() - 1;
-
-        for (int i = 0; i < 8; i++) {
+        for (int i = 1; i <= 8 and cur_position < uncompressed_size; i++) {
 
             // get longest common substring
-            
-            // int start_idx = get_max(0, cur_position - max_disp - 1);
-            // int end_idx = get_min(cur_position + max_length, uncompressed_size);
+            int start_idx = get_max(0, cur_position - max_disp - 1);
+            int length_from_start = cur_position - start_idx;
+            int length_from_current = uncompressed_size - cur_position;
 
-            // vector<uint8_t> lcs = longest_common_substring(start_idx, cur_position, cur_position, end_idx, uncompressed_data);
+            int best_run_length = 0;
+            int best_run_start = start_idx;
+            int cur_run_start = start_idx;
 
-            // if (lcs.size() < 3) {
-            //     // store as raw byte
+            for (int j = start_idx; j < cur_position and best_run_length < max_length; j++) {
+                int length = get_min(cur_position - j, lcs_helper->get_lcp(j, cur_position));
+                if (j + length >= cur_position) { // repeat string
+                    int k = cur_position + length;
+                    int l = 0;
+                    while (k < uncompressed_size && uncompressed_data[k] == uncompressed_data[j + l] && length < max_length) {
+                        length ++;
+                        k ++; l = (l + 1) % (cur_position - j);
+                    }
+                }
 
-            //     cur_position ++;
-            // } else {
-            //     // store as dictionary entry
+                if (best_run_length < length) {
+                    best_run_length = get_min(max_length, length);
+                    best_run_start = j;
+                }
+            }
 
-            //     flag_byte |= (1 << 8-i);
+            // TODO: precompute SA and LCP for entire file, then do constant time RMQs for each value in window
+            // for (int j = start_idx; j < cur_position and best_run_length < max_length; j++) {
+            //     int length = 0, k = 0;
+            //     while (cur_position + k < uncompressed_size && uncompressed_data[j+k] == uncompressed_data[cur_position+k] && length < max_length) {
+            //         length ++; k++;
+            //     }
+
+            //     if (j + length >= cur_position) {
+            //         int l = cur_position + length;
+            //         int m = 0;
+            //         while (l < uncompressed_size && uncompressed_data[l] == uncompressed_data[j+m] && length < max_length) {
+            //             length++; l++;
+            //             m = (m+1) % (cur_position-j);
+            //         }
+            //     }
+
+            //     if (length > best_run_length) {
+            //         best_run_length = get_min(length, max_length);
+            //         best_run_start = j;
+            //     }
             // }
+
+            // if (start_idx < cur_position) {
+            //     while (cur_run_start < cur_position) {
+            //         int this_run = 0;
+            //         int k = 0;
+            //         while (cur_position + k < uncompressed_size && uncompressed_data[cur_run_start + k] == uncompressed_data[cur_position + k]) {
+            //             this_run ++;
+            //             k ++;
+            //         }
+            //         if (cur_run_start + this_run >= cur_position) {
+            //             int r = cur_position + this_run;
+            //             int s = 0;
+            //             while (r < uncompressed_size and uncompressed_data[r] == uncompressed_data[cur_run_start + s]) {
+            //                 this_run ++;
+            //                 r ++;
+            //                 s = (s + 1) % (cur_position - cur_run_start);
+            //             }
+            //         }
+
+            //         if (this_run > best_run_length) {
+            //             best_run_length = get_min(max_length, this_run);
+            //             best_run_start = cur_run_start;
+            //         }
+
+            //         cur_run_start ++;
+            //     }
+            // }
+
+            if (best_run_length < 3) // store as raw byte 
+                buffer.push_back(uncompressed_data[cur_position++]);
+            else { // store as dictionary entry
+                uint16_t disp = cur_position - best_run_start -1;
+                
+                uint8_t length = best_run_length -3;
+                uint8_t token1 = ((disp >> 8) & 0x0F) | ((length << 4) & 0xF0);
+                uint8_t token2 = disp & 0xFF; 
+
+                buffer.push_back(token1); buffer.push_back(token2);
+
+                flag_byte |= (1 << 8-i); // set corresponding flag bit
+                cur_position += best_run_length;
+            }
 
         }
 
@@ -218,8 +300,9 @@ uint32_t compress_LZ10 (char *uncompressed_data, uint32_t uncompressed_size, uns
     buffer[2] = (uint8_t) ((uncompressed_size >> 8) & 0xFF);
     buffer[3] = (uint8_t) ((uncompressed_size >> 16) & 0xFF);
 
+    *compressed_data = buffer;
 
-    *compressed_data = buffer.data();
+    // delete lcs_helper;
 
     return compressed_size;
 }
@@ -240,30 +323,45 @@ void process_map_files (PokeDataStructure* pds, map<string, uint16_t> file_locat
         uint32_t file_start = read_int(&rom_file);
         uint32_t file_end = read_int(&rom_file);
 
-        assert(file_start % 512 == 0);
+        // assert(file_start % 512 == 0);
 
-        if (file_end % 512 == 0) {
-            cout << "check if no padding after " << it->first << ": " << hex << file_start << "," << file_end << endl;
-        }
+        // if (file_end % 512 == 0) {
+        //     cout << "check if no padding after " << it->first << ": " << hex << file_start << "," << file_end << endl;
+        // }
     }
 
 
-    // uint32_t map_file_in_fat = fat_offset + file_locations["data/field/map/m038_022.map.dat.lz"]*8;
-    // rom_file.seekg(map_file_in_fat, ios::beg);
-    // uint32_t map_file_start = read_int(&rom_file);
-    // uint32_t map_file_end = read_int(&rom_file);
+    uint32_t map_file_in_fat = fat_offset + file_locations["data/field/map/m038_022.map.dat.lz"]*8;
+    rom_file.seekg(map_file_in_fat, ios::beg);
+    uint32_t map_file_start = read_int(&rom_file);
+    uint32_t map_file_end = read_int(&rom_file);
 
-    // uint32_t file_size = map_file_end - map_file_start;
+    uint32_t file_size = map_file_end - map_file_start;
 
-    // char* map_file_bytes = new char[file_size];
-    // rom_file.seekg(map_file_start, ios::beg);
-    // rom_file.read(map_file_bytes, file_size);
+    char* map_file_bytes = new char[file_size];
+    rom_file.seekg(map_file_start, ios::beg);
+    rom_file.read(map_file_bytes, file_size);
 
-    // char* uncompressed_file = decompress_LZ10(map_file_bytes, file_size);
+    uint8_t* decompressed_file;
+    uint32_t decompressed_size = decompress_LZ10(map_file_bytes, file_size, &decompressed_file);
 
-    // delete[] map_file_bytes;
-    // delete[] uncompressed_file;
+    LCS* lcs_helper = new LCS;
+    lcs_helper->initialize(decompressed_file, decompressed_size);
 
+    for (int i = 0; i < 100; i++) {
+        vector<uint8_t> compressed_file;
+        uint32_t compressed_size = compress_LZ10(decompressed_file, decompressed_size, &compressed_file, lcs_helper);
+    }
+
+    /* just to test */
+    // ofstream outfile("recompressed.map.dat", ofstream::binary);
+    // outfile.write((const char *) compressed_file.data(), compressed_size);
+
+    // outfile.close();
+
+    delete[] map_file_bytes;
+    delete[] decompressed_file;
+    delete[] lcs_helper;
 
     // TODO decompress .map.dat.lz files (LZ10 compression)
     // https://github.com/SunakazeKun/AlmiaE/blob/master/src/com/aurum/almia/game/Compression.java
@@ -273,90 +371,76 @@ void process_map_files (PokeDataStructure* pds, map<string, uint16_t> file_locat
 }
 
 int main () {
-    // map<string,uint16_t> file_locations = get_file_locations ();
+    map<string,uint16_t> file_locations = get_file_locations ();
     
-    // ifstream rom_file(rom_file_path);
+    ifstream rom_file(rom_file_path);
 
-    // rom_file.seekg(0x48, ios::beg);
-    // uint32_t fat_offset = read_int(&rom_file);
+    rom_file.seekg(0x48, ios::beg);
+    uint32_t fat_offset = read_int(&rom_file);
 
-    // uint32_t pkmn_name_in_fat =  fat_offset + file_locations["data/message/etc/pokemon_name_us.mes"]*8;
-    // uint32_t field_move_in_fat = fat_offset + file_locations["data/message/etc/fieldwaza_name_us.mes"]*8;
-    // uint32_t pokeid_bin_in_fat = fat_offset + file_locations["data/param/PokeID.bin"]*8;
+    uint32_t pkmn_name_in_fat =  fat_offset + file_locations["data/message/etc/pokemon_name_us.mes"]*8;
+    uint32_t field_move_in_fat = fat_offset + file_locations["data/message/etc/fieldwaza_name_us.mes"]*8;
+    uint32_t pokeid_bin_in_fat = fat_offset + file_locations["data/param/PokeID.bin"]*8;
 
-    // rom_file.seekg(pkmn_name_in_fat, ios::beg);
-    // uint32_t pkmn_name_offset = read_int(&rom_file);
+    rom_file.seekg(pkmn_name_in_fat, ios::beg);
+    uint32_t pkmn_name_offset = read_int(&rom_file);
 
-    // rom_file.seekg(field_move_in_fat, ios::beg);
-    // uint32_t field_move_offset = read_int(&rom_file);
+    rom_file.seekg(field_move_in_fat, ios::beg);
+    uint32_t field_move_offset = read_int(&rom_file);
 
-    // rom_file.seekg(pokeid_bin_in_fat, ios::beg);
-    // uint32_t pokeid_bin_offset = read_int(&rom_file);
+    rom_file.seekg(pokeid_bin_in_fat, ios::beg);
+    uint32_t pokeid_bin_offset = read_int(&rom_file);
 
-    // cout << "Pokemon name offset: " << pkmn_name_offset << endl;
-    // cout << "Field name offset: " << field_move_offset << endl;
-    // cout << "PokeID bin offset: " << pokeid_bin_offset << endl;
+    cout << "Pokemon name offset: " << pkmn_name_offset << endl;
+    cout << "Field name offset: " << field_move_offset << endl;
+    cout << "PokeID bin offset: " << pokeid_bin_offset << endl;
 
-    // vector<string> pkmn_names = get_pokemon_names_rom (rom_file_path, 
-    //     pkmn_name_offset);
-    // vector<string> field_moves = get_field_moves_rom (rom_file_path, 
-    //     field_move_offset);
+    vector<string> pkmn_names = get_pokemon_names_rom (rom_file_path, 
+        pkmn_name_offset);
+    vector<string> field_moves = get_field_moves_rom (rom_file_path, 
+        field_move_offset);
 
-    // // cout << pkmn_names.size() << endl;
+    // cout << pkmn_names.size() << endl;
 
-    // PokeDataStructure pds;
+    PokeDataStructure pds;
 
-    // // TODO: make this a PDS member function
-    // read_pokeID_rom (&pds, rom_file_path, pokeid_bin_offset);
+    // TODO: make this a PDS member function
+    read_pokeID_rom (&pds, rom_file_path, pokeid_bin_offset);
 
-    // // uint16_t poke_id = 411;
+    // uint16_t poke_id = 411;
 
-    // // vector<uint16_t> res = pds.get_pokemon_with_geq_field_move(poke_id);
+    // vector<uint16_t> res = pds.get_pokemon_with_geq_field_move(poke_id);
 
-    // // pair<uint8_t, uint8_t> start_field_info = pds.get_field_move(poke_id);
-    // // cout << "Pokemon that can replace " << pkmn_names[poke_id] << " (" << 
-    // //     field_moves[start_field_info.first] << " " << dec 
-    // //     << (uint32_t) start_field_info.second << "):" << endl;
+    // pair<uint8_t, uint8_t> start_field_info = pds.get_field_move(poke_id);
+    // cout << "Pokemon that can replace " << pkmn_names[poke_id] << " (" << 
+    //     field_moves[start_field_info.first] << " " << dec 
+    //     << (uint32_t) start_field_info.second << "):" << endl;
 
-    // // for (auto it = res.begin(); it != res.end(); ++it) {
-    // //     pair<uint8_t, uint8_t> field_info = pds.get_field_move(*it);
-    // //     cout << pkmn_names[*it] << " (" << field_moves[field_info.first] << " "
-    // //         << dec << (uint32_t) field_info.second << ")" << endl;
-    // // }
+    // for (auto it = res.begin(); it != res.end(); ++it) {
+    //     pair<uint8_t, uint8_t> field_info = pds.get_field_move(*it);
+    //     cout << pkmn_names[*it] << " (" << field_moves[field_info.first] << " "
+    //         << dec << (uint32_t) field_info.second << ")" << endl;
+    // }
 
-    // // cout << endl;
-    // // pds.print_level_order();
+    // cout << endl;
+    // pds.print_level_order();
 
-    // // pds.self_test();
+    // pds.self_test();
 
-    // process_map_files(&pds, file_locations, fat_offset);
+    process_map_files(&pds, file_locations, fat_offset);
 
-    // rom_file.close();
+    rom_file.close();
 
-    unsigned char thing[] = "papaya";
+    // uint8_t thing1[] = "bananayaban";
+    // uint8_t thing2[] = "papaya";
 
-    int *s = new int[6];
+    // LCS *lcs_helper = new LCS;
 
-    for (int i = 0; i < 6; i++) {
-        s[i] = (int) (unsigned char) thing[i]; 
-    }
+    // lcs_helper->longest_common_substring(&thing1[0], &thing2[0], 11, 6);
 
-    int *sa = new int[6];
-    int *LCP = new int[6]; 
+    // lcs_helper->self_test_rmq();
 
-    suffix_array(s, sa, LCP, 6, 255);
-
-    for (int i = 0; i < 6; i++) 
-        cout << sa[i] << " ";
-
-    cout << endl << "LCP: ";
-
-    for (int i = 0; i < 6-1; i++) 
-        cout << LCP[i] << " ";
-
-    cout << endl;
-
-    delete [] s; delete [] sa; delete [] LCP;
+    // delete lcs_helper;
 
     return 0;
 }
