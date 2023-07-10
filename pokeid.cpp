@@ -123,9 +123,10 @@ void read_pokeID_rom (PokeDataStructure *pds, const char* rom_path, uint32_t off
         uint8_t field_id = (uint8_t) entry_data[5];
         uint8_t field_level = (uint8_t) entry_data[6];
 
-        pds->add_pokemon(name_id, field_id, field_level);
+        pds->add_pokemon(i, name_id, field_id, field_level);
 
         // cout << "Name: " << pkmn_names[name_id] << " (ID: " << name_id << ", " << field_moves[field_id] << " " << dec << field_level << ")" << endl;
+        // cout << "Name: " << pkmn_names[name_id] << " (ID: " << i << " " << dec << field_level << ")" << endl;
     }
 
     bin_file.close();

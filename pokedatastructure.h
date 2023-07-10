@@ -15,7 +15,7 @@ class PokeDataStructure {
         PokeDataStructure();
         ~PokeDataStructure();
         
-        void add_pokemon(uint16_t poke_id, uint8_t field_id, uint8_t field_level);
+        void add_pokemon(uint16_t poke_id, uint16_t name_id, uint8_t field_id, uint8_t field_level);
         std::pair<uint8_t, uint8_t> get_field_move(uint16_t poke_id);
 
         std::vector<uint16_t> get_pokemon_with_geq_field_move (uint16_t poke_id);
@@ -24,6 +24,9 @@ class PokeDataStructure {
         void self_test();
     private:
         std::map<uint16_t, uint16_t> pokemon_field_moves;
+        // ugh, hate having two maps
+        std::map<uint16_t, uint16_t> pokemon_names_to_reals;
+        std::map<uint16_t, uint16_t> pokemon_reals_to_names;
 
         struct TreeNode {
             // first is (field_id << 8) | field_level, second is poke_id

@@ -5,6 +5,8 @@
 #include <vector>
 #include <string.h>
 #include <stdint.h>
+#include <ctime>
+#include <cstdlib>
 
 #include "util.h"
 #include "lcs.h"
@@ -14,6 +16,7 @@
 using namespace std;
 
 const char* rom_file_path = "rom.nds";
+const char* out_file_path = "randomized.nds";
 
 // DFS through subtable, return a map from filepath to FAT offset
 void explore_subtable (uint32_t subtable_offset, uint32_t fnt_offset, string path, uint16_t *file_id, map<string,uint16_t> *file_locations) {
@@ -130,8 +133,6 @@ uint32_t decompress_LZ10 (char *compressed_bytes, uint32_t compressed_size, uint
         (uint8_t) *(compressed_bytes + 2) << 8 |
         (uint8_t) *(compressed_bytes + 1);
 
-    cout << "uncompressed_size: " << uncompressed_size << endl;
-
     uint8_t* uncompressed_file = new uint8_t[uncompressed_size];
 
     uint32_t input_pos = 4;
@@ -169,7 +170,7 @@ uint32_t decompress_LZ10 (char *compressed_bytes, uint32_t compressed_size, uint
     return uncompressed_size;
 }
 
-uint32_t compress_LZ10 (uint8_t *uncompressed_data, uint32_t uncompressed_size, vector<uint8_t> *compressed_data, LCS* lcs_helper) {
+uint32_t compress_LZ10 (uint8_t *uncompressed_data, uint32_t uncompressed_size, vector<uint8_t> *compressed_data) {
     vector<uint8_t> buffer;
 
     buffer.push_back(0x10);
@@ -181,9 +182,6 @@ uint32_t compress_LZ10 (uint8_t *uncompressed_data, uint32_t uncompressed_size, 
     int max_length = 0xF + 3;
 
     uint32_t cur_position = 0;
-
-    // LCS *lcs_helper = new LCS; // used for computing dictionary entries
-    // lcs_helper->initialize(uncompressed_data, uncompressed_size);
 
     while (cur_position < uncompressed_size) {
         // https://en.wikipedia.org/wiki/Longest_common_substring
@@ -208,70 +206,25 @@ uint32_t compress_LZ10 (uint8_t *uncompressed_data, uint32_t uncompressed_size, 
             int cur_run_start = start_idx;
 
             for (int j = start_idx; j < cur_position and best_run_length < max_length; j++) {
-                int length = get_min(cur_position - j, lcs_helper->get_lcp(j, cur_position));
-                if (j + length >= cur_position) { // repeat string
-                    int k = cur_position + length;
-                    int l = 0;
-                    while (k < uncompressed_size && uncompressed_data[k] == uncompressed_data[j + l] && length < max_length) {
-                        length ++;
-                        k ++; l = (l + 1) % (cur_position - j);
+                int length = 0, k = 0;
+                while (cur_position + k < uncompressed_size && uncompressed_data[j+k] == uncompressed_data[cur_position+k] && length < max_length) {
+                    length ++; k++;
+                }
+
+                if (j + length >= cur_position) {
+                    int l = cur_position + length;
+                    int m = 0;
+                    while (l < uncompressed_size && uncompressed_data[l] == uncompressed_data[j+m] && length < max_length) {
+                        length++; l++;
+                        m = (m+1) % (cur_position-j);
                     }
                 }
 
-                if (best_run_length < length) {
-                    best_run_length = get_min(max_length, length);
+                if (length > best_run_length) {
+                    best_run_length = get_min(length, max_length);
                     best_run_start = j;
                 }
             }
-
-            // TODO: precompute SA and LCP for entire file, then do constant time RMQs for each value in window
-            // for (int j = start_idx; j < cur_position and best_run_length < max_length; j++) {
-            //     int length = 0, k = 0;
-            //     while (cur_position + k < uncompressed_size && uncompressed_data[j+k] == uncompressed_data[cur_position+k] && length < max_length) {
-            //         length ++; k++;
-            //     }
-
-            //     if (j + length >= cur_position) {
-            //         int l = cur_position + length;
-            //         int m = 0;
-            //         while (l < uncompressed_size && uncompressed_data[l] == uncompressed_data[j+m] && length < max_length) {
-            //             length++; l++;
-            //             m = (m+1) % (cur_position-j);
-            //         }
-            //     }
-
-            //     if (length > best_run_length) {
-            //         best_run_length = get_min(length, max_length);
-            //         best_run_start = j;
-            //     }
-            // }
-
-            // if (start_idx < cur_position) {
-            //     while (cur_run_start < cur_position) {
-            //         int this_run = 0;
-            //         int k = 0;
-            //         while (cur_position + k < uncompressed_size && uncompressed_data[cur_run_start + k] == uncompressed_data[cur_position + k]) {
-            //             this_run ++;
-            //             k ++;
-            //         }
-            //         if (cur_run_start + this_run >= cur_position) {
-            //             int r = cur_position + this_run;
-            //             int s = 0;
-            //             while (r < uncompressed_size and uncompressed_data[r] == uncompressed_data[cur_run_start + s]) {
-            //                 this_run ++;
-            //                 r ++;
-            //                 s = (s + 1) % (cur_position - cur_run_start);
-            //             }
-            //         }
-
-            //         if (this_run > best_run_length) {
-            //             best_run_length = get_min(max_length, this_run);
-            //             best_run_start = cur_run_start;
-            //         }
-
-            //         cur_run_start ++;
-            //     }
-            // }
 
             if (best_run_length < 3) // store as raw byte 
                 buffer.push_back(uncompressed_data[cur_position++]);
@@ -302,78 +255,270 @@ uint32_t compress_LZ10 (uint8_t *uncompressed_data, uint32_t uncompressed_size, 
 
     *compressed_data = buffer;
 
-    // delete lcs_helper;
-
     return compressed_size;
 }
 
+#define NARC_MAGIC 0x4E415243
+#define NARC_FATB  0x46415442
+#define NARC_FNTB  0x464E5442
+#define NARC_FIMG  0x46494D47
+#define LYR_MAGIC  0x4C595200
+
+// http://llref.emutalk.net/docs/?file=xml/narc.xml#xml-doc
+// http://www.pipian.com/ierukana/hacking/ds_narc.html
+// https://www.romhacking.net/documents/%5B469%5Dnds_formats.htm#NARC
+// returns vector of start/end offsets for files
+vector<pair<uint32_t,uint32_t>> decode_NARC (uint8_t *data) {
+    uint32_t magic = byte_array_to_int((char*) data, true); // big endian due to byte order of magic (bom)
+    assert(magic == NARC_MAGIC); //  magic is "NARC"
+
+    uint32_t file_size =  byte_array_to_int((char*) data +0x8);
+
+    uint32_t fatb_offset = 0x10;
+    uint32_t fatb_stamp = byte_array_to_int((char*) data + fatb_offset); 
+    assert(fatb_stamp == NARC_FATB);
+
+    uint32_t num_files_offset = fatb_offset + 0x8;
+    uint32_t num_files = byte_array_to_int((char*) data + num_files_offset);
+
+    vector<pair<uint32_t,uint32_t>> file_positions;
+
+    for (int i = 0; i < num_files; i++) {
+        uint32_t start_offset = byte_array_to_int((char *) data + num_files_offset + 0x4 + i*8);
+        uint32_t end_offset = byte_array_to_int((char *) data + num_files_offset + 0x4 + (i*8) + 0x4);
+        file_positions.push_back(pair<uint32_t, uint32_t>(start_offset, end_offset));
+    }
+
+    uint32_t fntb_offset = num_files_offset + 0x4 + num_files * 8;
+    uint32_t fntb_stamp = byte_array_to_int((char*) data + fntb_offset);
+    assert(fntb_stamp == NARC_FNTB);
+
+    uint32_t fntb_size = byte_array_to_int((char *) data + fntb_offset + 0x4);
+
+    uint32_t fimg_offset = fntb_offset + fntb_size;
+
+    uint32_t fimg_stamp = byte_array_to_int((char *) data + fimg_offset);
+
+    assert(fimg_stamp == NARC_FIMG);
+
+    // update vector so it contains absolute offsets (not just relative to start of FIMG)
+    for (auto it = file_positions.begin(); it != file_positions.end(); ++it) {
+        it->first = fimg_offset + 0x8 + it->first; // +8 b/c relative offsets start after FIMG header
+        it->second = fimg_offset + 0x8 + it->second;
+    }
+
+    return file_positions;
+}
+
 void process_map_files (PokeDataStructure* pds, map<string, uint16_t> file_locations, uint32_t fat_offset) {
-    map<string, uint16_t> map_dat_files;
+    map<uint32_t, string> inv_start_offsets; // sorted by key in increasing order by default
 
     ifstream rom_file(rom_file_path);
+    ofstream out_file(out_file_path, ofstream::binary);
 
     for (auto it = file_locations.begin(); it != file_locations.end(); ++it) {
-        if (str_ends_with(it->first, ".map.dat.lz")) {
-            map_dat_files.insert(*it);
-            // cout << it->first << " " << hex << it->second << endl;
-        }
-
         uint32_t file_in_fat = fat_offset + it->second*8;
         rom_file.seekg(file_in_fat, ios::beg);
         uint32_t file_start = read_int(&rom_file);
-        uint32_t file_end = read_int(&rom_file);
-
-        // assert(file_start % 512 == 0);
-
-        // if (file_end % 512 == 0) {
-        //     cout << "check if no padding after " << it->first << ": " << hex << file_start << "," << file_end << endl;
-        // }
+        inv_start_offsets[file_start] = it->first;
     }
 
+    uint32_t last_end_offset = 0;
 
-    uint32_t map_file_in_fat = fat_offset + file_locations["data/field/map/m038_022.map.dat.lz"]*8;
-    rom_file.seekg(map_file_in_fat, ios::beg);
-    uint32_t map_file_start = read_int(&rom_file);
-    uint32_t map_file_end = read_int(&rom_file);
+    for (auto it = inv_start_offsets.begin(); it != inv_start_offsets.end(); ++it) {
+        uint32_t file_fat_offset = fat_offset + file_locations[it->second]*8;
+        rom_file.seekg(file_fat_offset, ios::beg);
+        uint32_t file_start = read_int(&rom_file);
+        uint32_t file_end   = read_int(&rom_file);
+        uint32_t file_size = file_end - file_start;
 
-    uint32_t file_size = map_file_end - map_file_start;
+        uint32_t new_file_start = file_start;
+        uint32_t new_file_end = file_end;
 
-    char* map_file_bytes = new char[file_size];
-    rom_file.seekg(map_file_start, ios::beg);
-    rom_file.read(map_file_bytes, file_size);
+        if (file_start <= last_end_offset) {
+            new_file_start = round_to_multiple(last_end_offset+1, 512);
+            
+            // pad with FF between last_end offset and new start 
+            uint8_t padding[new_file_start - last_end_offset];
+            memset(padding, 0xFF, new_file_start - last_end_offset);
+            out_file.seekp(last_end_offset, ios::beg);
+            out_file.write((char*) padding, new_file_start - last_end_offset);
+        }
 
-    uint8_t* decompressed_file;
-    uint32_t decompressed_size = decompress_LZ10(map_file_bytes, file_size, &decompressed_file);
+        if (str_ends_with(it->second, ".map.dat.lz")) {
+            char file_bytes[file_size];
+            rom_file.seekg(file_start, ios::beg);
+            rom_file.read(file_bytes, file_size);
 
-    LCS* lcs_helper = new LCS;
-    lcs_helper->initialize(decompressed_file, decompressed_size);
+            // decompress map file
+            uint8_t* decompressed_file;
+            uint32_t decompressed_size = decompress_LZ10(file_bytes, file_size, &decompressed_file);
 
-    for (int i = 0; i < 100; i++) {
-        vector<uint8_t> compressed_file;
-        uint32_t compressed_size = compress_LZ10(decompressed_file, decompressed_size, &compressed_file, lcs_helper);
+            // unpack NARC
+            vector<pair<uint32_t,uint32_t>> narc_offsets = decode_NARC(decompressed_file);
+            uint32_t lyr_start, lyr_end;
+            for (auto it = narc_offsets.begin(); it != narc_offsets.end(); ++it) {
+                uint32_t stamp = byte_array_to_int((char*) decompressed_file + it->first, true);
+                if (stamp == LYR_MAGIC) {
+                    lyr_start = it->first; lyr_end = it->second;
+                }
+            }
+
+            // decode NARC of LYR file
+            vector<pair<uint32_t,uint32_t>> lyr_narc_offsets = decode_NARC(decompressed_file + lyr_start + 0x4);
+            assert(lyr_narc_offsets.size() == 1);
+            uint32_t narc_container_start = lyr_narc_offsets[0].first;
+            vector<pair<uint32_t,uint32_t>> layers = decode_NARC(decompressed_file + lyr_start + 0x4 + narc_container_start);
+
+            // find LYR layer that contains pokemon data and randomize it 
+            for (auto it = layers.begin(); it != layers.end(); ++it) {
+                uint32_t start = lyr_start + 0x4 + narc_container_start + it->first;
+                uint32_t identifier = byte_array_to_int((char*) decompressed_file + start);
+                if (identifier == 0x9) { // Pokemon data
+                    cout << "offset: " << hex << start << endl;
+                    uint32_t num_entries = byte_array_to_int((char*) decompressed_file + start + 0x4);
+                    for (int i = 0; i < num_entries; i++) {
+                        
+                        uint32_t pokeid_offset = 0x6 + (i*0xA);
+                        uint16_t poke_id = byte_array_to_short((char*) decompressed_file + start + 0x8 + pokeid_offset);
+                        
+                        cout << dec << poke_id << ": ";
+                        vector<uint16_t> replacement_mons = pds->get_pokemon_with_geq_field_move(poke_id);
+                        uint16_t new_pokemon = replacement_mons[rand() % replacement_mons.size()];
+
+                        decompressed_file[start+0x8+pokeid_offset] = new_pokemon & 0xFF;
+                        decompressed_file[start+0x8+pokeid_offset+1] = new_pokemon & 0xFF00;
+                    }
+                }
+            }
+
+            // compress file
+            vector<uint8_t> compressed_file; 
+            uint32_t compressed_size = compress_LZ10(decompressed_file, decompressed_size, &compressed_file);
+
+            new_file_end = new_file_start + compressed_size;
+
+            out_file.seekp(file_fat_offset, ios::beg);
+            write_int(&out_file, new_file_start); // write new start in FAT
+
+            out_file.seekp(file_fat_offset + 4, ios::beg);
+            write_int(&out_file, new_file_end); // write new end in FAT
+
+            out_file.seekp(new_file_start, ios::beg);
+            out_file.write((char*) compressed_file.data(), compressed_size);
+
+            delete[] decompressed_file;
+
+        } else if (new_file_start != file_start) {
+            // need to copy over file starting at new offset
+            char file_bytes[file_size];
+            rom_file.seekg(file_start, ios::beg);
+            rom_file.read(file_bytes, file_size);
+
+            new_file_end = new_file_start + file_size;
+        }
+
+        last_end_offset = new_file_end;
     }
 
-    /* just to test */
-    // ofstream outfile("recompressed.map.dat", ofstream::binary);
-    // outfile.write((const char *) compressed_file.data(), compressed_size);
+    // uint32_t map_file_in_fat = fat_offset + file_locations["data/field/map/m038_022.map.dat.lz"]*8;
+    // rom_file.seekg(map_file_in_fat, ios::beg);
+    // uint32_t map_file_start = read_int(&rom_file);
+    // uint32_t map_file_end = read_int(&rom_file);
 
-    // outfile.close();
+    // uint32_t file_size = map_file_end - map_file_start;
 
-    delete[] map_file_bytes;
-    delete[] decompressed_file;
-    delete[] lcs_helper;
+    // char map_file_bytes[file_size];
+    // rom_file.seekg(map_file_start, ios::beg);
+    // rom_file.read(map_file_bytes, file_size);
+
+    // uint8_t* decompressed_file;
+    // uint32_t decompressed_size = decompress_LZ10(map_file_bytes, file_size, &decompressed_file);
+
+    // vector<pair<uint32_t,uint32_t>> narc_offsets = decode_NARC(decompressed_file);
+    // uint32_t lyr_start, lyr_end;
+    // for (auto it = narc_offsets.begin(); it != narc_offsets.end(); ++it) {
+    //     uint32_t stamp = byte_array_to_int((char*) decompressed_file + it->first, true);
+    //     if (stamp == LYR_MAGIC) {
+    //         lyr_start = it->first; lyr_end = it->second;
+    //     }
+    // }
+
+    // vector<pair<uint32_t,uint32_t>> lyr_narc_offsets = decode_NARC(decompressed_file + lyr_start + 0x4);
+
+    // assert(lyr_narc_offsets.size() == 1);
+
+    // uint32_t narc_container_start = lyr_narc_offsets[0].first;
+
+    // vector<pair<uint32_t,uint32_t>> layers = decode_NARC(decompressed_file + lyr_start + 0x4 + narc_container_start);
+
+    // for (auto it = layers.begin(); it != layers.end(); ++it) {
+    //     uint32_t start = lyr_start + 0x4 + narc_container_start + it->first;
+    //     uint32_t identifier = byte_array_to_int((char*) decompressed_file + start);
+    //     if (identifier == 0x9) { // Pokemon data
+    //         cout << "offset: " << hex << start << endl;
+    //         uint32_t num_entries = byte_array_to_int((char*) decompressed_file + start + 0x4);
+    //         for (int i = 0; i < num_entries; i++) {
+                
+    //             uint32_t pokeid_offset = 0x6 + (i*0xA);
+    //             uint16_t poke_id = byte_array_to_short((char*) decompressed_file + start + 0x8 + pokeid_offset);
+                
+    //             cout << dec << poke_id << ": ";
+    //             vector<uint16_t> replacement_mons = pds->get_pokemon_with_geq_field_move(poke_id);
+    //             uint16_t new_pokemon = replacement_mons[rand() % replacement_mons.size()];
+
+    //             decompressed_file[start+0x8+pokeid_offset] = new_pokemon & 0xFF;
+    //             decompressed_file[start+0x8+pokeid_offset+1] = new_pokemon & 0xFF00;
+    //         }
+    //     }
+    // }
+
+    // vector<uint8_t> compressed_file; 
+    // uint32_t compressed_size = compress_LZ10(decompressed_file, decompressed_size, &compressed_file);
+
+    // uint32_t new_file_start = map_file_start;
+
+    // if (map_file_start <= last_end_offset) {
+    //     new_file_start = round_to_multiple(last_end_offset+1, 512);
+        
+    //     // pad with FF between last_end offset and new start 
+    //     uint8_t padding[new_file_start - last_end_offset];
+    //     memset(padding, 0xFF, new_file_start - last_end_offset);
+    //     out_file.seekp(last_end_offset, ios::beg);
+    //     out_file.write((char*) padding, new_file_start - last_end_offset);
+    // }
+
+    // uint32_t new_file_end = new_file_start + compressed_size;
+
+    // out_file.seekp(map_file_in_fat, ios::beg);
+    // write_int(&out_file, new_file_start); // write new start in FAT
+
+    // out_file.seekp(map_file_in_fat + 4, ios::beg);
+    // write_int(&out_file, new_file_end); // write new end in FAT
+
+    // out_file.seekp(new_file_start, ios::beg);
+    // out_file.write((char*) compressed_file.data(), compressed_size);
+
+    // last_end_offset = new_file_end;
+
+    // delete[] decompressed_file;
 
     // TODO decompress .map.dat.lz files (LZ10 compression)
     // https://github.com/SunakazeKun/AlmiaE/blob/master/src/com/aurum/almia/game/Compression.java
     // https://ndspy.readthedocs.io/en/latest/_modules/ndspy/lz10.html#decompress
 
-    rom_file.close();
+    rom_file.close(); out_file.close();
 }
 
 int main () {
+    srand(time(NULL));
+
     map<string,uint16_t> file_locations = get_file_locations ();
     
     ifstream rom_file(rom_file_path);
+
+    // ofstream out_file(out_file_path); // copy over file
+    // out_file << rom_file.rdbuf(); out_file.close();
 
     rom_file.seekg(0x48, ios::beg);
     uint32_t fat_offset = read_int(&rom_file);
@@ -407,40 +552,13 @@ int main () {
     // TODO: make this a PDS member function
     read_pokeID_rom (&pds, rom_file_path, pokeid_bin_offset);
 
-    // uint16_t poke_id = 411;
+    rom_file.seekg(0x80, ios::beg);
+    uint32_t total_size = read_int(&rom_file);
+    cout << "total size: " << dec << total_size << endl;
 
-    // vector<uint16_t> res = pds.get_pokemon_with_geq_field_move(poke_id);
-
-    // pair<uint8_t, uint8_t> start_field_info = pds.get_field_move(poke_id);
-    // cout << "Pokemon that can replace " << pkmn_names[poke_id] << " (" << 
-    //     field_moves[start_field_info.first] << " " << dec 
-    //     << (uint32_t) start_field_info.second << "):" << endl;
-
-    // for (auto it = res.begin(); it != res.end(); ++it) {
-    //     pair<uint8_t, uint8_t> field_info = pds.get_field_move(*it);
-    //     cout << pkmn_names[*it] << " (" << field_moves[field_info.first] << " "
-    //         << dec << (uint32_t) field_info.second << ")" << endl;
-    // }
-
-    // cout << endl;
-    // pds.print_level_order();
-
-    // pds.self_test();
-
-    process_map_files(&pds, file_locations, fat_offset);
+    // process_map_files(&pds, file_locations, fat_offset);
 
     rom_file.close();
-
-    // uint8_t thing1[] = "bananayaban";
-    // uint8_t thing2[] = "papaya";
-
-    // LCS *lcs_helper = new LCS;
-
-    // lcs_helper->longest_common_substring(&thing1[0], &thing2[0], 11, 6);
-
-    // lcs_helper->self_test_rmq();
-
-    // delete lcs_helper;
 
     return 0;
 }

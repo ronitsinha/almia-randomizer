@@ -174,14 +174,12 @@ void LCS::st_preprocess() {
     }
 }
 
-void LCS::initialize (uint8_t *s, int l) {
-    do_free();
-    
+void LCS::initialize (uint8_t *s, int l) {    
     n = l+1;
     T = new int[n]; 
     sa = new int[n]; lcp = new int[n];
 
-    for (int i = 0; i < n; i++) T[i] = (unsigned int) s[i]+1;
+    for (int i = 0; i < l; i++) T[i] = ((unsigned int) s[i])+1;
     T[l] = 0;
 
     suffix_array(T, sa, n, 257);
@@ -355,7 +353,6 @@ void LCS::suffix_array(int *s, int *SA, int n, int K) {
     }
 
 
-
     // stably sort the mod 0 suffixes from SA12 by their first character
     for (int i=0, j=0; i < n02; i++) if (SA12[i] < n0) s0[j++] = 3*SA12[i];
     radix_pass(s0, SA0, s, n0, K, 0, n);
@@ -366,8 +363,8 @@ void LCS::suffix_array(int *s, int *SA, int n, int K) {
         int i = GetI(); // position of current offset 12 suffix
         int j = SA0[p]; // position of current offset 0  suffix
         if (SA12[t] < n0 ? // different compares for mod 1 and mod 2 suffixes
-            leq(s[i], get_char(s12,SA12[t]+n0,n02+3), s[j], get_char(s12,j/3,n02+3)) :
-            leq(s[i], s[i+1], get_char(s12,SA12[t]-n0+1,n02+3), s[j], get_char(s,j+1,n), get_char(s12,j/3+n0,n02+3))) // compare triple here because i+1 mod 3 is 0
+            leq(get_char(s,i,n), get_char(s12,SA12[t]+n0,n02+3), s[j], get_char(s12,j/3,n02+3)) :
+            leq(get_char(s,i,n), get_char(s,i+1,n), get_char(s12,SA12[t]-n0+1,n02+3), s[j], get_char(s,j+1,n), get_char(s12,j/3+n0,n02+3))) // compare triple here because i+1 mod 3 is 0
         { // suffix from SA12 is smaller
             SA[k] = i; t++;
             if (t == n02) // done -- only SA0 suffixes left

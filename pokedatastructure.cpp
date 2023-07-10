@@ -189,22 +189,26 @@ PokeDataStructure::TreeNode* PokeDataStructure::add_node(TreeNode *node,
 
 }
 
-void PokeDataStructure::add_pokemon(uint16_t poke_id, uint8_t field_id, 
+void PokeDataStructure::add_pokemon(uint16_t poke_id, uint16_t name_id, uint8_t field_id, 
     uint8_t field_level)
 {
+    pokemon_reals_to_names[poke_id] = name_id;
+ 
+    if (pokemon_field_moves.find(name_id) != pokemon_field_moves.end()) 
+        return; // already seen this pokemon
+
     uint16_t field_signature = ((uint16_t) field_id << 8) | field_level;
 
-    assert(field_id == (field_signature >> 8));
-    assert(field_level == (uint8_t) field_signature);
+    // assert(field_id == (field_signature >> 8));
+    // assert(field_level == (uint8_t) field_signature);
 
-    if (pokemon_field_moves.find(poke_id) == pokemon_field_moves.end()) {
-        pokemon_field_moves[poke_id] = field_signature;
-        root = add_node(root, field_signature, poke_id);
-    }
+    pokemon_field_moves[name_id] = field_signature;
+    pokemon_names_to_reals[name_id] = poke_id;
+    root = add_node(root, field_signature, name_id);
 }
 
 pair<uint8_t, uint8_t> PokeDataStructure::get_field_move(uint16_t poke_id) {
-    uint16_t field_signature = pokemon_field_moves[poke_id];
+    uint16_t field_signature = pokemon_field_moves[pokemon_reals_to_names[poke_id]];
 
     uint8_t field_move = (uint8_t)(field_signature >> 8);
     // https://stackoverflow.com/questions/27889213/c-integer-downcast
@@ -216,10 +220,22 @@ pair<uint8_t, uint8_t> PokeDataStructure::get_field_move(uint16_t poke_id) {
 
 vector<uint16_t> PokeDataStructure::get_pokemon_with_geq_field_move(
     uint16_t poke_id) {
-    assert (pokemon_field_moves.find(poke_id) != pokemon_field_moves.end());
-    uint16_t field_signature = pokemon_field_moves[poke_id];
+    assert (pokemon_reals_to_names.find(poke_id) != pokemon_reals_to_names.end());
+    uint16_t field_signature = pokemon_field_moves[pokemon_reals_to_names[poke_id]];
     uint16_t field_sig_max = field_signature | 0xFF;
-    return range_query(field_signature, field_sig_max);
+    
+    // the reason we store name ids as opposed to the actual pokemon ids
+    //  is because name ids are unique and we want to avoid duplicates
+    //  unfortunately this means we need maps to go from name ids to real ids
+    //  and back.
+    vector<uint16_t> query = range_query(field_signature, field_sig_max);
+    vector<uint16_t> answer;
+
+    // get real ids from name ids
+    for (auto it = query.begin(); it != query.end(); ++it)
+        answer.push_back(pokemon_names_to_reals[*it]);
+
+    return answer;
 }
 
 void PokeDataStructure::collect_subtree(TreeNode *node, vector<uint16_t> *vec)
