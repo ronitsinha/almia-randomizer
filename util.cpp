@@ -72,3 +72,23 @@ uint32_t round_to_multiple (uint32_t n, uint32_t multiple) {
 
     return n + multiple - remainder;
 }
+
+// https://github.com/pleonex/Ninokuni/blob/master/Programs/NinoPatcher/NinoPatcher/Crc16.cs
+// https://web.archive.org/web/20110718184246/http://nocash.emubase.de/gbatek.htm#biosmiscfunctions
+// https://github.com/Zetten/hachoir/blob/master/hachoir-parser/hachoir_parser/program/nds.py
+uint16_t compute_crc16 (uint8_t *bytes, int size) {
+    uint16_t val[8] = {0xC0C1,0xC181,0xC301,0xC601,0xCC01,0xD801,0xF001,0xA001};
+    uint16_t crc = 0xFFFF;
+
+    for (int i = 0; i < size; i++) {
+        crc ^= bytes[i];
+
+        for (int j = 0; j < 8; j++) {
+            if (crc & 1) crc = (crc >> 1) ^ 0xA001;
+            else         crc >>= 1;
+            // crc = (crc & 1) ? (crc >> 1) ^ (val[j] << (7-j)) : (crc >> 1);
+        }
+    }   
+
+    return crc;
+}

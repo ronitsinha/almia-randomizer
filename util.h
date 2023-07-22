@@ -20,4 +20,6 @@ int get_min (int a, int b);
 
 uint32_t round_to_multiple (uint32_t n, uint32_t multiple);
 
+uint16_t compute_crc16 (uint8_t *bytes, int size);
+
 #endif

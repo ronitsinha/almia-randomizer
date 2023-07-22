@@ -171,12 +171,15 @@ uint32_t decompress_LZ10 (char *compressed_bytes, uint32_t compressed_size, uint
 }
 
 uint32_t compress_LZ10 (uint8_t *uncompressed_data, uint32_t uncompressed_size, vector<uint8_t> *compressed_data) {
+    assert(uncompressed_size <= 0xFFFFFF);
+
     vector<uint8_t> buffer;
 
     buffer.push_back(0x10);
-    buffer.push_back(0); /* TODO: load uncompressed size into these three bytes */
-    buffer.push_back(0);
-    buffer.push_back(0);
+    // load uncompressed size into buffer
+    buffer.push_back((uint8_t) (uncompressed_size & 0xFF));
+    buffer.push_back((uint8_t) ((uncompressed_size >> 8) & 0xFF));
+    buffer.push_back((uint8_t) ((uncompressed_size >> 16) & 0xFF));
 
     int max_disp = 0xFFF;
     int max_length = 0xF + 3;
@@ -211,15 +214,6 @@ uint32_t compress_LZ10 (uint8_t *uncompressed_data, uint32_t uncompressed_size, 
                     length ++; k++;
                 }
 
-                if (j + length >= cur_position) {
-                    int l = cur_position + length;
-                    int m = 0;
-                    while (l < uncompressed_size && uncompressed_data[l] == uncompressed_data[j+m] && length < max_length) {
-                        length++; l++;
-                        m = (m+1) % (cur_position-j);
-                    }
-                }
-
                 if (length > best_run_length) {
                     best_run_length = get_min(length, max_length);
                     best_run_start = j;
@@ -237,7 +231,7 @@ uint32_t compress_LZ10 (uint8_t *uncompressed_data, uint32_t uncompressed_size, 
 
                 buffer.push_back(token1); buffer.push_back(token2);
 
-                flag_byte |= (1 << 8-i); // set corresponding flag bit
+                flag_byte |= 1 << (8-i); // set corresponding flag bit
                 cur_position += best_run_length;
             }
 
@@ -247,11 +241,6 @@ uint32_t compress_LZ10 (uint8_t *uncompressed_data, uint32_t uncompressed_size, 
     }
 
     uint32_t compressed_size = buffer.size();
-
-    // load uncompressed size into buffer
-    buffer[1] = (uint8_t) (uncompressed_size & 0xFF);
-    buffer[2] = (uint8_t) ((uncompressed_size >> 8) & 0xFF);
-    buffer[3] = (uint8_t) ((uncompressed_size >> 16) & 0xFF);
 
     *compressed_data = buffer;
 
@@ -314,7 +303,11 @@ void process_map_files (PokeDataStructure* pds, map<string, uint16_t> file_locat
     map<uint32_t, string> inv_start_offsets; // sorted by key in increasing order by default
 
     ifstream rom_file(rom_file_path);
-    ofstream out_file(out_file_path, ofstream::binary);
+    fstream out_file(out_file_path);
+
+    rom_file.seekg(0x20, ios::beg);
+    uint32_t arm9_offset = read_int(&rom_file);
+    uint32_t arm9_size = read_int(&rom_file);
 
     for (auto it = file_locations.begin(); it != file_locations.end(); ++it) {
         uint32_t file_in_fat = fat_offset + it->second*8;
@@ -335,17 +328,17 @@ void process_map_files (PokeDataStructure* pds, map<string, uint16_t> file_locat
         uint32_t new_file_start = file_start;
         uint32_t new_file_end = file_end;
 
-        if (file_start <= last_end_offset) {
-            new_file_start = round_to_multiple(last_end_offset+1, 512);
+        if (file_start < last_end_offset) {
+            new_file_start = round_to_multiple(last_end_offset, 512);
             
             // pad with FF between last_end offset and new start 
-            uint8_t padding[new_file_start - last_end_offset];
-            memset(padding, 0xFF, new_file_start - last_end_offset);
             out_file.seekp(last_end_offset, ios::beg);
-            out_file.write((char*) padding, new_file_start - last_end_offset);
+            for (uint32_t i = last_end_offset; i < new_file_start; i++) 
+                out_file.put(0xFF);
+
         }
 
-        if (str_ends_with(it->second, ".map.dat.lz")) {
+        if (str_ends_with(it->second, ".map.dat.lz") and !str_ends_with(it->second, "m001_013.map.dat.lz")) {
             char file_bytes[file_size];
             rom_file.seekg(file_start, ios::beg);
             rom_file.read(file_bytes, file_size);
@@ -366,28 +359,28 @@ void process_map_files (PokeDataStructure* pds, map<string, uint16_t> file_locat
 
             // decode NARC of LYR file
             vector<pair<uint32_t,uint32_t>> lyr_narc_offsets = decode_NARC(decompressed_file + lyr_start + 0x4);
-            assert(lyr_narc_offsets.size() == 1);
-            uint32_t narc_container_start = lyr_narc_offsets[0].first;
-            vector<pair<uint32_t,uint32_t>> layers = decode_NARC(decompressed_file + lyr_start + 0x4 + narc_container_start);
+            
+            for (auto jt = lyr_narc_offsets.begin(); jt != lyr_narc_offsets.end(); ++jt) {
+                uint32_t narc_container_start = jt->first;
+                vector<pair<uint32_t,uint32_t>> layers = decode_NARC(decompressed_file + lyr_start + 0x4 + narc_container_start);
 
-            // find LYR layer that contains pokemon data and randomize it 
-            for (auto it = layers.begin(); it != layers.end(); ++it) {
-                uint32_t start = lyr_start + 0x4 + narc_container_start + it->first;
-                uint32_t identifier = byte_array_to_int((char*) decompressed_file + start);
-                if (identifier == 0x9) { // Pokemon data
-                    cout << "offset: " << hex << start << endl;
-                    uint32_t num_entries = byte_array_to_int((char*) decompressed_file + start + 0x4);
-                    for (int i = 0; i < num_entries; i++) {
-                        
-                        uint32_t pokeid_offset = 0x6 + (i*0xA);
-                        uint16_t poke_id = byte_array_to_short((char*) decompressed_file + start + 0x8 + pokeid_offset);
-                        
-                        cout << dec << poke_id << ": ";
-                        vector<uint16_t> replacement_mons = pds->get_pokemon_with_geq_field_move(poke_id);
-                        uint16_t new_pokemon = replacement_mons[rand() % replacement_mons.size()];
+                // find LYR layer that contains pokemon data and randomize it 
+                for (auto it = layers.begin(); it != layers.end(); ++it) {
+                    uint32_t start = lyr_start + 0x4 + narc_container_start + it->first;
+                    uint32_t identifier = byte_array_to_int((char*) decompressed_file + start);
+                    if (identifier == 0x9) { // Pokemon data
+                        uint32_t num_entries = byte_array_to_int((char*) decompressed_file + start + 0x4);
+                        for (int i = 0; i < num_entries; i++) {
+                            
+                            uint32_t pokeid_offset = 0x6 + (i*0xA);
+                            uint16_t poke_id = byte_array_to_short((char*) decompressed_file + start + 0x8 + pokeid_offset);
+                            
+                            vector<uint16_t> replacement_mons = pds->get_pokemon_with_geq_field_move(poke_id);
+                            uint16_t new_pokemon = replacement_mons[rand() % replacement_mons.size()];
 
-                        decompressed_file[start+0x8+pokeid_offset] = new_pokemon & 0xFF;
-                        decompressed_file[start+0x8+pokeid_offset+1] = new_pokemon & 0xFF00;
+                            decompressed_file[start+0x8+pokeid_offset] = new_pokemon & 0xFF;
+                            decompressed_file[start+0x8+pokeid_offset+1] = (new_pokemon >> 8) & 0xFF;
+                        }
                     }
                 }
             }
@@ -398,14 +391,19 @@ void process_map_files (PokeDataStructure* pds, map<string, uint16_t> file_locat
 
             new_file_end = new_file_start + compressed_size;
 
+            if (round_to_multiple(new_file_end, 512) > round_to_multiple(file_end,512)) continue;
+
             out_file.seekp(file_fat_offset, ios::beg);
-            write_int(&out_file, new_file_start); // write new start in FAT
+            write_int((ofstream*) &out_file, new_file_start); // write new start in FAT
 
             out_file.seekp(file_fat_offset + 4, ios::beg);
-            write_int(&out_file, new_file_end); // write new end in FAT
+            write_int((ofstream*) &out_file, new_file_end); // write new end in FAT
 
             out_file.seekp(new_file_start, ios::beg);
             out_file.write((char*) compressed_file.data(), compressed_size);
+
+            for (uint32_t i = compressed_size; i < file_size; i++)
+                out_file.put(0xFF);
 
             delete[] decompressed_file;
 
@@ -415,97 +413,67 @@ void process_map_files (PokeDataStructure* pds, map<string, uint16_t> file_locat
             rom_file.seekg(file_start, ios::beg);
             rom_file.read(file_bytes, file_size);
 
+            out_file.seekp(new_file_start, ios::beg);
+            out_file.write(file_bytes, file_size);
+
             new_file_end = new_file_start + file_size;
+
+            out_file.seekp(file_fat_offset, ios::beg);
+            write_int((ofstream*) &out_file, new_file_start); // write new start in FAT
+
+            out_file.seekp(file_fat_offset + 4, ios::beg);
+            write_int((ofstream*) &out_file, new_file_end); // write new end in FAT
         }
 
         last_end_offset = new_file_end;
     }
 
-    // uint32_t map_file_in_fat = fat_offset + file_locations["data/field/map/m038_022.map.dat.lz"]*8;
-    // rom_file.seekg(map_file_in_fat, ios::beg);
-    // uint32_t map_file_start = read_int(&rom_file);
-    // uint32_t map_file_end = read_int(&rom_file);
+    cout << "new rom size: " << last_end_offset << endl;
 
-    // uint32_t file_size = map_file_end - map_file_start;
+    // update total size in header
+    out_file.seekp(0x80, ios::beg);
+    write_int((ofstream*) &out_file, last_end_offset);
 
-    // char map_file_bytes[file_size];
-    // rom_file.seekg(map_file_start, ios::beg);
-    // rom_file.read(map_file_bytes, file_size);
+    // recompute header checksum
+    uint8_t header_data[0x15E];
+    out_file.seekg(0, ios::beg);
+    out_file.read((char *) header_data, 0x15E);
 
-    // uint8_t* decompressed_file;
-    // uint32_t decompressed_size = decompress_LZ10(map_file_bytes, file_size, &decompressed_file);
+    // https://github.com/Luca1991/NDSFactory/blob/master/ndsfactory/ndsfactory.cpp#L156
+    uint16_t header_checksum = compute_crc16(header_data, 0x15E);
+    uint8_t checksum_LE[] = {(uint8_t) (header_checksum & 0xFF), 
+        (uint8_t) ((header_checksum >> 8) & 0xFF)};
 
-    // vector<pair<uint32_t,uint32_t>> narc_offsets = decode_NARC(decompressed_file);
-    // uint32_t lyr_start, lyr_end;
-    // for (auto it = narc_offsets.begin(); it != narc_offsets.end(); ++it) {
-    //     uint32_t stamp = byte_array_to_int((char*) decompressed_file + it->first, true);
-    //     if (stamp == LYR_MAGIC) {
-    //         lyr_start = it->first; lyr_end = it->second;
-    //     }
-    // }
+    out_file.seekp(0x15E, ios::beg);
+    out_file.write((char *) checksum_LE, 2);
 
-    // vector<pair<uint32_t,uint32_t>> lyr_narc_offsets = decode_NARC(decompressed_file + lyr_start + 0x4);
-
-    // assert(lyr_narc_offsets.size() == 1);
-
-    // uint32_t narc_container_start = lyr_narc_offsets[0].first;
-
-    // vector<pair<uint32_t,uint32_t>> layers = decode_NARC(decompressed_file + lyr_start + 0x4 + narc_container_start);
-
-    // for (auto it = layers.begin(); it != layers.end(); ++it) {
-    //     uint32_t start = lyr_start + 0x4 + narc_container_start + it->first;
-    //     uint32_t identifier = byte_array_to_int((char*) decompressed_file + start);
-    //     if (identifier == 0x9) { // Pokemon data
-    //         cout << "offset: " << hex << start << endl;
-    //         uint32_t num_entries = byte_array_to_int((char*) decompressed_file + start + 0x4);
-    //         for (int i = 0; i < num_entries; i++) {
-                
-    //             uint32_t pokeid_offset = 0x6 + (i*0xA);
-    //             uint16_t poke_id = byte_array_to_short((char*) decompressed_file + start + 0x8 + pokeid_offset);
-                
-    //             cout << dec << poke_id << ": ";
-    //             vector<uint16_t> replacement_mons = pds->get_pokemon_with_geq_field_move(poke_id);
-    //             uint16_t new_pokemon = replacement_mons[rand() % replacement_mons.size()];
-
-    //             decompressed_file[start+0x8+pokeid_offset] = new_pokemon & 0xFF;
-    //             decompressed_file[start+0x8+pokeid_offset+1] = new_pokemon & 0xFF00;
-    //         }
-    //     }
-    // }
-
-    // vector<uint8_t> compressed_file; 
-    // uint32_t compressed_size = compress_LZ10(decompressed_file, decompressed_size, &compressed_file);
-
-    // uint32_t new_file_start = map_file_start;
-
-    // if (map_file_start <= last_end_offset) {
-    //     new_file_start = round_to_multiple(last_end_offset+1, 512);
-        
-    //     // pad with FF between last_end offset and new start 
-    //     uint8_t padding[new_file_start - last_end_offset];
-    //     memset(padding, 0xFF, new_file_start - last_end_offset);
-    //     out_file.seekp(last_end_offset, ios::beg);
-    //     out_file.write((char*) padding, new_file_start - last_end_offset);
-    // }
-
-    // uint32_t new_file_end = new_file_start + compressed_size;
-
-    // out_file.seekp(map_file_in_fat, ios::beg);
-    // write_int(&out_file, new_file_start); // write new start in FAT
-
-    // out_file.seekp(map_file_in_fat + 4, ios::beg);
-    // write_int(&out_file, new_file_end); // write new end in FAT
-
-    // out_file.seekp(new_file_start, ios::beg);
-    // out_file.write((char*) compressed_file.data(), compressed_size);
-
-    // last_end_offset = new_file_end;
-
-    // delete[] decompressed_file;
+    cout << "new header checksum: " << hex << header_checksum << endl;
 
     // TODO decompress .map.dat.lz files (LZ10 compression)
     // https://github.com/SunakazeKun/AlmiaE/blob/master/src/com/aurum/almia/game/Compression.java
     // https://ndspy.readthedocs.io/en/latest/_modules/ndspy/lz10.html#decompress
+
+    // m001_004
+    // uint32_t file_fat_offset = fat_offset + file_locations["data/field/map/m001_004.map.dat.lz"]*8;
+    // rom_file.seekg(file_fat_offset, ios::beg);
+    // uint32_t file_start = read_int(&rom_file);
+    // uint32_t file_end   = read_int(&rom_file);
+    // uint32_t file_size = file_end - file_start;
+
+    // char file_bytes[file_size];
+    // rom_file.seekg(file_start, ios::beg);
+    // rom_file.read(file_bytes, file_size);
+
+    // uint8_t* decompressed_file;
+    // uint32_t decompressed_size = decompress_LZ10(file_bytes, file_size, &decompressed_file);    
+
+    // vector<uint8_t> compressed_file; 
+    // uint32_t compressed_size = compress_LZ10(decompressed_file, decompressed_size, &compressed_file);
+
+    // ofstream decomp_file("recompressed_001_004.map.dat");
+    // decomp_file.write((char *) compressed_file.data(), compressed_size);
+
+    // delete[] decompressed_file;
 
     rom_file.close(); out_file.close();
 }
@@ -517,8 +485,8 @@ int main () {
     
     ifstream rom_file(rom_file_path);
 
-    // ofstream out_file(out_file_path); // copy over file
-    // out_file << rom_file.rdbuf(); out_file.close();
+    ofstream out_file(out_file_path); // copy over file
+    out_file << rom_file.rdbuf(); out_file.close();
 
     rom_file.seekg(0x48, ios::beg);
     uint32_t fat_offset = read_int(&rom_file);
@@ -556,7 +524,7 @@ int main () {
     uint32_t total_size = read_int(&rom_file);
     cout << "total size: " << dec << total_size << endl;
 
-    // process_map_files(&pds, file_locations, fat_offset);
+    process_map_files(&pds, file_locations, fat_offset);
 
     rom_file.close();
 
