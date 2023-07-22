@@ -196,21 +196,3 @@ vector<string> get_pokemon_names_rom (const char *path, uint32_t offset) {
 vector<string> get_field_moves_rom (const char *path, uint32_t offset) {
     return read_mes_from_rom(path, offset);
 }
-
-vector<string> get_pokemon_names () {
-    return read_mes_file("pokemon_name_us.mes");
-}
-
-vector<string> get_field_moves () {
-    return read_mes_file("fieldwaza_name_us.mes");
-}
-
-// int main () {
-//     vector<string> pkmn_names = get_pokemon_names ();
-//     vector<string> field_moves = get_field_moves ();
-
-
-//     read_pokeID_bin (pkmn_names, field_moves);
-
-//     return 0;
-// }

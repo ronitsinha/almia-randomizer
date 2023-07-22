@@ -1,8 +1,11 @@
-all: test
+CXX = g++
+CXXFLAGS = -Wall -Wextra -Wpedantic -Wshadow
 
-test: clean
-	g++ util.cpp pokedatastructure.cpp \
-		pokeid.cpp test.cpp -o test.out
+all: main
+
+main: clean
+	$(CXX) ${CXXFLAGS} util.cpp pokedatastructure.cpp \
+		romprocessor.cpp main.cpp -o range_randomizer
 
 clean:
-	rm -f *.out
+	rm -f range_randomizer
