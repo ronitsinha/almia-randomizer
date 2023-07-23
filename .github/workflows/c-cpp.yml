@@ -12,16 +12,23 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
-      # tag: ${{ steps.generate_release_tag.outputs.next_release_tag }}
+      tag: ${{ steps.generate_release_tag.outputs.next_release_tag }}
     steps:
+      - name: 'Generate Release Tag'
+        id: generate_release_tag
+        uses: amitsingh-007/next-release-tag@v4.0.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag_prefix: 'v'
+          tag_template: 'yyyy.mm.dd.i'
       - name: 'Create Release'
         id: create_release
         uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
+          release_name: Release ${{ steps.get_version.outputs.VERSION }}
           draft: false
           prerelease: false
 
@@ -41,7 +48,7 @@ jobs:
         upload_url: ${{ needs.release.outputs.upload_url }}
         asset_path: range_randomizer
         asset_name: range_randomizer
-        asset_content_type: 
+        asset_content_type: application/octet-stream
   build-windows:
     runs-on: windows-latest
     needs: release
@@ -58,4 +65,4 @@ jobs:
         upload_url: ${{ needs.release.outputs.upload_url }}
         asset_path: range_randomizer.exe
         asset_name: range_randomizer.exe
-        asset_content_type: application/octet-stream
+        asset_content_type: application/x-msdownload
