@@ -15,9 +15,11 @@ See "Releases" for Linux and Windows versions.
 
 Run the tool in a terminal, supplying the input ROM file and the name of the
 output randomized ROM.
-```./range_randommizer [input file] [output file]```
+```./range_randomizer [input file] [output file]```
+
 For example:
-```./range_randommizer rom.nds randomized.nds```
+```./range_randomizer rom.nds randomized.nds```
+
 The program will take a few seconds to run before generating a ROM with the
 specified output name.
 
