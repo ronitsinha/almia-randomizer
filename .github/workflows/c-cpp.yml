@@ -42,6 +42,7 @@ jobs:
         upload_url: ${{ needs.release.outputs.upload_url }}
         asset_path: range_randomizer
         asset_name: range_randomizer
+        asset_content_type: 
   build-windows:
     runs-on: windows-latest
     needs: release
@@ -58,3 +59,4 @@ jobs:
         upload_url: ${{ needs.release.outputs.upload_url }}
         asset_path: range_randomizer.exe
         asset_name: range_randomizer.exe
+        asset_content_type: application/octet-stream
