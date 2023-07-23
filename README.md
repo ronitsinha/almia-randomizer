@@ -15,14 +15,14 @@ See "Releases" for Linux and Windows versions.
 
 Run the tool in a terminal, supplying the input ROM file and the name of the
 output randomized ROM.
-`./range_randommizer [input file] [output file]`
+```./range_randommizer [input file] [output file]```
 For example:
-`./range_randommizer rom.nds randomized.nds`
+```./range_randommizer rom.nds randomized.nds```
 The program will take a few seconds to run before generating a ROM with the
 specified output name.
 
 ## References
-[AlmiaE](https://github.com/SunakazeKun/AlmiaE) -- an excellent tool for editing Shadows of Almia
+[AlmiaE](https://github.com/SunakazeKun/AlmiaE) -- an excellent tool for editing Shadows of Almia \
 [FEAT](https://github.com/SciresM/FEAT/tree/master) -- for extracting DS rom, LZ10 compression
 
 For my experiments in designing an optimal LZ10 compression algorithm (found in `old/`):
