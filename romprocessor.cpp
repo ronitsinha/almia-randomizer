@@ -3,8 +3,8 @@
 using namespace std;
 
 RomProcessor::RomProcessor(const char *in_path, const char *out_path) {
-    rom_file.open(in_path);
-    out_file.open(out_path, fstream::in | fstream::out | fstream::trunc);
+    rom_file.open(in_path, fstream::in | fstream::binary);
+    out_file.open(out_path, fstream::in | fstream::out | fstream::trunc | fstream::binary);
 
     out_file << rom_file.rdbuf(); out_file.flush(); // copy over file
 
