@@ -1,5 +1,8 @@
 CXX = g++
 CXXFLAGS = -Wall -Wextra -Wpedantic -Wshadow
+ifeq ($(OS),Windows_NT)
+	CXXFLAGS += -static
+endif
 OUTPUT = range_randomizer
 
 all: main
